@@ -13,7 +13,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      # ── 1. Checkout your Neptune fork ──────────────────────────────────────
+      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout Neptune
         uses: actions/checkout@v4
         with:
@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ── 3. Add pre-installed NSIS to PATH (already on windows-2022 runner) ─
+      # ── 3. Add NSIS (pre-installed on runner) to PATH ──────────────────────
       - name: Add NSIS to PATH
         shell: powershell
         run: |
@@ -34,7 +34,6 @@ jobs:
             echo "Found NSIS at $nsisPath"
             echo $nsisPath | Out-File -Append -Encoding ascii $env:GITHUB_PATH
           } else {
-            # Fallback: search common locations
             $alt = "C:\ProgramData\chocolatey\lib\nsis\tools"
             echo "Trying fallback: $alt"
             echo $alt | Out-File -Append -Encoding ascii $env:GITHUB_PATH
@@ -49,13 +48,12 @@ jobs:
           $out = "$env:TEMP\MozillaBuildSetup.exe"
           Invoke-WebRequest -Uri $url -OutFile $out
           Start-Process -FilePath $out -ArgumentList "/S" -Wait
-          echo "C:\mozilla-build" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
 
       # ── 5. Write mozconfig ─────────────────────────────────────────────────
       - name: Write mozconfig
-        shell: bash
+        shell: powershell
         run: |
-          cat > mozconfig << 'EOF'
+          $mozconfig = @"
           ac_add_options --enable-application=browser
           ac_add_options --enable-optimize
           ac_add_options --disable-debug
@@ -66,14 +64,15 @@ jobs:
           ac_add_options --disable-updater
           ac_add_options --disable-maintenance-service
           ac_add_options --with-branding=browser/branding/unofficial
-          ac_add_options --target=x86_64-pc-mingw32
-          ac_add_options --host=x86_64-pc-mingw32
 
           mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-neptune
           mk_add_options AUTOCLOBBER=1
-          EOF
+          "@
+          $mozconfig | Out-File -FilePath "mozconfig" -Encoding utf8
+          echo "mozconfig written:"
+          cat mozconfig
 
-      # ── 6. Cache compiled objects (saves ~40-60 min on repeat builds) ──────
+      # ── 6. Cache build objects ─────────────────────────────────────────────
       - name: Cache build objects
         uses: actions/cache@v4
         with:
@@ -81,25 +80,37 @@ jobs:
           key: neptune-obj-${{ runner.os }}-${{ hashFiles('mozconfig') }}
           restore-keys: neptune-obj-${{ runner.os }}-
 
-      # ── 7. Bootstrap ───────────────────────────────────────────────────────
+      # ── 7. Bootstrap (using Mozilla Build bash directly) ───────────────────
       - name: Bootstrap
-        shell: cmd
+        shell: powershell
         run: |
-          C:\mozilla-build\start-shell.bat python3 ./mach bootstrap --application-choice=browser --no-interactive
+          $bash = "C:\mozilla-build\msys\bin\bash.exe"
+          $repo = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $repo = $repo -replace '^([A-Za-z]):', '/\1'
+          & $bash --login -c "cd '$repo' && python3 ./mach bootstrap --application-choice=browser --no-interactive"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      # ── 8. Build ───────────────────────────────────────────────────────────
+      # ── 8. Build (using Mozilla Build bash directly) ───────────────────────
       - name: Build
-        shell: cmd
+        shell: powershell
         run: |
-          C:\mozilla-build\start-shell.bat python3 ./mach build
+          $bash = "C:\mozilla-build\msys\bin\bash.exe"
+          $repo = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $repo = $repo -replace '^([A-Za-z]):', '/\1'
+          & $bash --login -c "cd '$repo' && python3 ./mach build"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         env:
           MACH_NO_TERMINAL_FOOTER: 1
 
       # ── 9. Package ─────────────────────────────────────────────────────────
       - name: Package
-        shell: cmd
+        shell: powershell
         run: |
-          C:\mozilla-build\start-shell.bat python3 ./mach package
+          $bash = "C:\mozilla-build\msys\bin\bash.exe"
+          $repo = $env:GITHUB_WORKSPACE -replace '\\', '/'
+          $repo = $repo -replace '^([A-Za-z]):', '/\1'
+          & $bash --login -c "cd '$repo' && python3 ./mach package"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # ── 10. Upload installer ───────────────────────────────────────────────
       - name: Upload Neptune installer
