@@ -5,27 +5,43 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch: # allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build-windows:
     name: Build for Windows 10/11
-    runs-on: windows-2022  # Windows Server 2022 — VS2022 pre-installed
+    runs-on: windows-2022
 
     steps:
       # ── 1. Checkout your Neptune fork ──────────────────────────────────────
       - name: Checkout Neptune
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1  # shallow clone for speed
+          fetch-depth: 1
 
-      # ── 2. Set up Python (mach needs it) ───────────────────────────────────
+      # ── 2. Set up Python ───────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      # ── 3. Install Mozilla Build toolchain ─────────────────────────────────
+      # ── 3. Add pre-installed NSIS to PATH (already on windows-2022 runner) ─
+      - name: Add NSIS to PATH
+        shell: powershell
+        run: |
+          $nsisPath = "C:\Program Files (x86)\NSIS"
+          if (Test-Path $nsisPath) {
+            echo "Found NSIS at $nsisPath"
+            echo $nsisPath | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+          } else {
+            # Fallback: search common locations
+            $alt = "C:\ProgramData\chocolatey\lib\nsis\tools"
+            echo "Trying fallback: $alt"
+            echo $alt | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+          }
+          makensis /VERSION
+
+      # ── 4. Install Mozilla Build ───────────────────────────────────────────
       - name: Install Mozilla Build
         shell: powershell
         run: |
@@ -34,13 +50,6 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $out
           Start-Process -FilePath $out -ArgumentList "/S" -Wait
           echo "C:\mozilla-build" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
-
-      # ── 4. Install NSIS separately (avoids integrity issues) ───────────────
-      - name: Install NSIS
-        shell: powershell
-        run: |
-          choco install nsis --version=3.09 -y
-          echo "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
 
       # ── 5. Write mozconfig ─────────────────────────────────────────────────
       - name: Write mozconfig
@@ -51,6 +60,11 @@ jobs:
           ac_add_options --enable-optimize
           ac_add_options --disable-debug
           ac_add_options --disable-tests
+          ac_add_options --disable-accessibility
+          ac_add_options --disable-webrtc
+          ac_add_options --disable-crashreporter
+          ac_add_options --disable-updater
+          ac_add_options --disable-maintenance-service
           ac_add_options --with-branding=browser/branding/unofficial
           ac_add_options --target=x86_64-pc-mingw32
           ac_add_options --host=x86_64-pc-mingw32
@@ -59,13 +73,21 @@ jobs:
           mk_add_options AUTOCLOBBER=1
           EOF
 
-      # ── 6. Bootstrap build dependencies ───────────────────────────────────
+      # ── 6. Cache compiled objects (saves ~40-60 min on repeat builds) ──────
+      - name: Cache build objects
+        uses: actions/cache@v4
+        with:
+          path: obj-neptune
+          key: neptune-obj-${{ runner.os }}-${{ hashFiles('mozconfig') }}
+          restore-keys: neptune-obj-${{ runner.os }}-
+
+      # ── 7. Bootstrap ───────────────────────────────────────────────────────
       - name: Bootstrap
         shell: cmd
         run: |
           C:\mozilla-build\start-shell.bat python3 ./mach bootstrap --application-choice=browser --no-interactive
 
-      # ── 7. Build Neptune ───────────────────────────────────────────────────
+      # ── 8. Build ───────────────────────────────────────────────────────────
       - name: Build
         shell: cmd
         run: |
@@ -73,13 +95,13 @@ jobs:
         env:
           MACH_NO_TERMINAL_FOOTER: 1
 
-      # ── 8. Package into Windows installer (.exe) ───────────────────────────
+      # ── 9. Package ─────────────────────────────────────────────────────────
       - name: Package
         shell: cmd
         run: |
           C:\mozilla-build\start-shell.bat python3 ./mach package
 
-      # ── 9. Upload the installer as a downloadable artifact ─────────────────
+      # ── 10. Upload installer ───────────────────────────────────────────────
       - name: Upload Neptune installer
         uses: actions/upload-artifact@v4
         with:
@@ -88,8 +110,8 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      # ── 10. Also upload the zip build (fallback if installer not generated) ─
-      - name: Upload Neptune zip build
+      # ── 11. Upload zip (fallback) ──────────────────────────────────────────
+      - name: Upload Neptune zip
         uses: actions/upload-artifact@v4
         with:
           name: Neptune-Windows-Zip
