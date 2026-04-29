@@ -1,0 +1,98 @@
+name: Build Neptune Browser (Windows)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch: # allows manual trigger from GitHub UI
+
+jobs:
+  build-windows:
+    name: Build for Windows 10/11
+    runs-on: windows-2022  # Windows Server 2022 — VS2022 pre-installed
+
+    steps:
+      # ── 1. Checkout your Neptune fork ──────────────────────────────────────
+      - name: Checkout Neptune
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1  # shallow clone for speed
+
+      # ── 2. Set up Python (mach needs it) ───────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # ── 3. Install Mozilla Build toolchain ─────────────────────────────────
+      - name: Install Mozilla Build
+        shell: powershell
+        run: |
+          $url = "https://ftp.mozilla.org/pub/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe"
+          $out = "$env:TEMP\MozillaBuildSetup.exe"
+          Invoke-WebRequest -Uri $url -OutFile $out
+          Start-Process -FilePath $out -ArgumentList "/S" -Wait
+          echo "C:\mozilla-build" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+
+      # ── 4. Install NSIS separately (avoids integrity issues) ───────────────
+      - name: Install NSIS
+        shell: powershell
+        run: |
+          choco install nsis --version=3.09 -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+
+      # ── 5. Write mozconfig ─────────────────────────────────────────────────
+      - name: Write mozconfig
+        shell: bash
+        run: |
+          cat > mozconfig << 'EOF'
+          ac_add_options --enable-application=browser
+          ac_add_options --enable-optimize
+          ac_add_options --disable-debug
+          ac_add_options --disable-tests
+          ac_add_options --with-branding=browser/branding/unofficial
+          ac_add_options --target=x86_64-pc-mingw32
+          ac_add_options --host=x86_64-pc-mingw32
+
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-neptune
+          mk_add_options AUTOCLOBBER=1
+          EOF
+
+      # ── 6. Bootstrap build dependencies ───────────────────────────────────
+      - name: Bootstrap
+        shell: cmd
+        run: |
+          C:\mozilla-build\start-shell.bat python3 ./mach bootstrap --application-choice=browser --no-interactive
+
+      # ── 7. Build Neptune ───────────────────────────────────────────────────
+      - name: Build
+        shell: cmd
+        run: |
+          C:\mozilla-build\start-shell.bat python3 ./mach build
+        env:
+          MACH_NO_TERMINAL_FOOTER: 1
+
+      # ── 8. Package into Windows installer (.exe) ───────────────────────────
+      - name: Package
+        shell: cmd
+        run: |
+          C:\mozilla-build\start-shell.bat python3 ./mach package
+
+      # ── 9. Upload the installer as a downloadable artifact ─────────────────
+      - name: Upload Neptune installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neptune-Windows-Installer
+          path: obj-neptune/dist/install/sea/*.exe
+          if-no-files-found: warn
+          retention-days: 30
+
+      # ── 10. Also upload the zip build (fallback if installer not generated) ─
+      - name: Upload Neptune zip build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neptune-Windows-Zip
+          path: obj-neptune/dist/*.zip
+          if-no-files-found: warn
+          retention-days: 30
