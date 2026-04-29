@@ -1,0 +1,55 @@
+/* -- Neptune: Safari/macOS Theme -- */
+
+:root {
+  --toolbar-bgcolor: rgba(236, 236, 236, 0.85);
+  --toolbar-color: #1c1c1e;
+  --urlbar-bg: rgba(255, 255, 255, 0.6);
+  --urlbar-border-radius: 10px 10px 0 0;
+  --tab-selected:-bg: rgba(255, 255, 255, 0.9);
+  --sidebar-bg: rgba(245, 245, 247, 0.9);
+  --font-family: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --backdrop-blur: blur(20px) saturate(180%);
+}
+
+/* Frosted glass toolbar */
+#navigator-toolbox {
+  background: var(--toolbar-bgcolor) !important;
+  backdrop-filter: var(--backdrop-blur) !important;
+  -webkit-backdrop-filter: var(--backdrop-blur) !important;
+  border-bottom: 1px solid rgba(0,0,0,0.1) !important;
+  font-family: var(--font-family) !important;
+}
+
+/* Safari-style pill URL bar */
+#urlbar {
+  background: var(--urlbar-bg) !important;
+  border-radius: var(--urlbar-border-radius) !important;
+  border: 1px solid rgba(0,0,0,0.12) !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08) !important;
+  backdrop-filter: blur(10px) !important;
+}
+
+/* Rounded tabs */
+.tabbrowser-tab {
+  border-radius: var(--tab-border-radius) !important;
+  font-family: var(--font-family) !important;
+}
+
+.tab-background[selected] {
+  background: var(--tab-selected-bg) !important;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1) !important;
+}
+
+/* Hide tab close buttons unless hovered */
+.tab-close-button {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.tabbrowser-tab:hover .tab-close-button {
+  opacity: 1;
+}
+
+/* Minimal window controls spacing */
+#TabsToolbar {
+  padding-top: 6px !important;
+}
