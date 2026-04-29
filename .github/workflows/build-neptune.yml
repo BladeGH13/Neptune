@@ -10,14 +10,38 @@ on:
 jobs:
   build-windows:
     name: Build for Windows 10/11
-    runs-on: windows-2022
+    runs-on: ubuntu-22.04  # Linux is MUCH faster for large repos
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
-      - name: Checkout Neptune
+      # ── 1. Checkout with sparse checkout (only grab what we need) ──────────
+      - name: Checkout Neptune (sparse)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          # Sparse checkout skips huge directories we don't need
+          sparse-checkout: |
+            browser/
+            build/
+            config/
+            dom/
+            gfx/
+            js/
+            layout/
+            media/
+            modules/
+            netwerk/
+            security/
+            services/
+            toolkit/
+            xpcom/
+            xpfe/
+            mozconfig
+            mach
+            configure.py
+            configure.sh
+            Makefile.in
+            aclocal.m4
+            client.mk
 
       # ── 2. Set up Python ───────────────────────────────────────────────────
       - name: Set up Python 3.11
@@ -25,56 +49,87 @@ jobs:
         with:
           python-version: '3.11'
 
-      # ── 3. Add NSIS to PATH ────────────────────────────────────────────────
-      - name: Add NSIS to PATH
-        shell: powershell
+      # ── 3. Install Linux build dependencies ───────────────────────────────
+      - name: Install build dependencies
         run: |
-          $nsisPath = "C:\Program Files (x86)\NSIS"
-          if (Test-Path $nsisPath) {
-            echo $nsisPath | Out-File -Append -Encoding ascii $env:GITHUB_PATH
-          }
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential libgtk-3-dev libdbus-glib-1-dev \
+            libxt-dev libasound2-dev libpulse-dev \
+            nasm yasm clang llvm lld \
+            pkg-config zip unzip curl wget \
+            python3-pip nodejs npm \
+            mingw-w64  # Windows cross-compiler
 
-      # ── 4. Install Mozilla Build ───────────────────────────────────────────
-      - name: Install Mozilla Build
-        shell: powershell
+      # ── 4. Write mozconfig for Windows cross-compile ───────────────────────
+      - name: Write mozconfig
         run: |
-          $url = "https://ftp.mozilla.org/pub/mozilla/libraries/win32/MozillaBuildSetup-Latest.exe"
-          $out = "$env:TEMP\MozillaBuildSetup.exe"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          Start-Process -FilePath $out -ArgumentList "/S" -Wait
-          echo "Install complete. Exit code: $LASTEXITCODE"
+          cat > mozconfig << 'EOF'
+          # Cross-compile for Windows 64-bit from Linux
+          ac_add_options --enable-application=browser
+          ac_add_options --target=x86_64-pc-mingw32
+          ac_add_options --enable-optimize
+          ac_add_options --disable-debug
+          ac_add_options --disable-tests
+          ac_add_options --disable-accessibility
+          ac_add_options --disable-webrtc
+          ac_add_options --disable-crashreporter
+          ac_add_options --disable-updater
+          ac_add_options --disable-maintenance-service
+          ac_add_options --with-branding=browser/branding/unofficial
 
-      # ── 5. DIAGNOSTIC: Find Mozilla Build and bash ────────────────────────
-      - name: Find Mozilla Build installation
-        shell: powershell
+          mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-neptune
+          mk_add_options AUTOCLOBBER=1
+          mk_add_options MOZ_MAKE_FLAGS="-j$(nproc)"
+          EOF
+          echo "mozconfig written:"
+          cat mozconfig
+
+      # ── 5. Cache build objects ─────────────────────────────────────────────
+      - name: Cache build objects
+        uses: actions/cache@v4
+        with:
+          path: obj-neptune
+          key: neptune-linux-win64-${{ hashFiles('mozconfig') }}-${{ github.sha }}
+          restore-keys: |
+            neptune-linux-win64-${{ hashFiles('mozconfig') }}-
+            neptune-linux-win64-
+
+      # ── 6. Bootstrap ───────────────────────────────────────────────────────
+      - name: Bootstrap
         run: |
-          echo "=== Searching all drives for mozilla-build ==="
-          $drives = @("C:\", "D:\")
-          foreach ($drive in $drives) {
-            Get-ChildItem -Path $drive -Filter "mozilla-build" -Recurse -ErrorAction SilentlyContinue -Depth 3 |
-              ForEach-Object { echo $_.FullName }
-          }
+          python3 ./mach bootstrap \
+            --application-choice=browser \
+            --no-interactive
+        env:
+          MACH_NO_TERMINAL_FOOTER: 1
 
-          echo ""
-          echo "=== Searching for bash.exe anywhere ==="
-          foreach ($drive in $drives) {
-            Get-ChildItem -Path $drive -Filter "bash.exe" -Recurse -ErrorAction SilentlyContinue -Depth 6 |
-              ForEach-Object { echo $_.FullName }
-          }
+      # ── 7. Build ───────────────────────────────────────────────────────────
+      - name: Build Neptune
+        run: |
+          python3 ./mach build
+        env:
+          MACH_NO_TERMINAL_FOOTER: 1
 
-          echo ""
-          echo "=== Searching for mach file ==="
-          Get-ChildItem -Path "D:\a" -Filter "mach" -Recurse -ErrorAction SilentlyContinue -Depth 5 |
-            ForEach-Object { echo $_.FullName }
+      # ── 8. Package ─────────────────────────────────────────────────────────
+      - name: Package
+        run: |
+          python3 ./mach package
 
-          echo ""
-          echo "=== Contents of C:\ ==="
-          Get-ChildItem "C:\" -ErrorAction SilentlyContinue | Select-Object Name
+      # ── 9. Upload installer ────────────────────────────────────────────────
+      - name: Upload Neptune installer (.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neptune-Windows-Installer
+          path: obj-neptune/dist/install/sea/*.exe
+          if-no-files-found: warn
+          retention-days: 30
 
-          echo ""
-          echo "=== Contents of D:\ ==="
-          Get-ChildItem "D:\" -ErrorAction SilentlyContinue | Select-Object Name
-
-          echo ""
-          echo "=== PATH ==="
-          $env:PATH -split ";" | ForEach-Object { echo $_ }
+      # ── 10. Upload zip fallback ────────────────────────────────────────────
+      - name: Upload Neptune zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Neptune-Windows-Zip
+          path: obj-neptune/dist/*.zip
+          if-no-files-found: warn
+          retention-days: 30
